@@ -230,7 +230,7 @@ class ProxmoxGuestsCard extends HTMLElement {
           } else if (dom === "sensor") {
             if (/status(_raw)?$/.test(t)) set("status", e, /_raw$/.test(t) ? 1 : 2);
             else if (/cpu_used$|^cpu$/.test(t) && !/host/.test(t)) set("cpu", e, 1);
-            else if (/uptime/.test(t)) set("uptime", e, 1);
+            else if (/uptime|last_?boot|boot_?time/.test(t)) set("uptime", e, /uptime/.test(t) ? 1 : 2);
             else if (/memory/.test(t) && !/free|total|max|host/.test(t)) set("memory", e, 1);
             else if (/disk/.test(t) && !/read|write|total|free|max|io|host/.test(t)) set("disk", e, 1);
           }
@@ -486,7 +486,7 @@ const EDITOR_LABELS = {
   title: "Title", discover: "Auto-discover guests (proxmoxve integration, admin only)", compact: "Compact (hide usage bars)",
   show_actions: "Show power buttons", show_summary: "Show running count",
   name: "Name", type: "Type", node: "Node (optional)", status: "Status entity",
-  cpu: "CPU usage entity", memory: "Memory usage entity", disk: "Disk usage entity", uptime: "Uptime entity",
+  cpu: "CPU usage entity", memory: "Memory usage entity", disk: "Disk usage entity", uptime: "Uptime or last boot entity",
   start: "Start button", shutdown: "Shutdown button", reboot: "Reboot button", stop: "Force stop button",
 };
 const SENSOR = { entity: { domain: ["sensor", "binary_sensor"] } };

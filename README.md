@@ -91,4 +91,5 @@ The action fields accept `button`, `switch` or `script` entities.
 ## Notes
 
 - The proxmoxve integration disables its power buttons by default. Enable them on each guest's device page (hidden entities), and make sure the Proxmox user has the `VM.PowerMgmt` privilege.
+- The `uptime` field accepts either an uptime sensor (a number of seconds, minutes, hours or days) or a timestamp sensor such as the integration's last boot sensor.
 - Usage bars only draw for sensors reporting in `%`; other units are shown as text.
