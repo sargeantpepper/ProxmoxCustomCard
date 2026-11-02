@@ -30,6 +30,10 @@ Built for the [dougiteixeira/proxmoxve](https://github.com/dougiteixeira/proxmox
 
 ## Usage
 
+### Visual editor (no YAML)
+
+Add the card from the dashboard editor, then use **Guests → + Add guest**. Give each guest a name and type, then pick its status, CPU, memory, disk and uptime entities and its start, shutdown, reboot and stop buttons from the dropdowns. Everything except the name is optional.
+
 ### Auto-discovery
 
 ```yaml

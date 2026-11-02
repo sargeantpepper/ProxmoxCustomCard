@@ -186,10 +186,14 @@ class ProxmoxGuestsCard extends HTMLElement {
     return { columns: 12, min_columns: 6, rows: "auto" };
   }
 
+  static getConfigElement() {
+    return document.createElement("proxmox-guests-card-editor");
+  }
+
   static getStubConfig(hass) {
     return {
       title: "Proxmox",
-      discover: true,
+      guests: [{ name: "My VM", type: "vm" }],
     };
   }
 
@@ -236,6 +240,7 @@ class ProxmoxGuestsCard extends HTMLElement {
       }
       guests.sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { numeric: true }));
       this._discovered = guests;
+      this._discoverInfo = { entities: ents.filter((e) => e.platform === "proxmoxve").length, devices: Object.keys(byDevice).length };
       this._discoverError = null;
     } catch (err) {
       this._discovered = [];
@@ -350,7 +355,9 @@ class ProxmoxGuestsCard extends HTMLElement {
       return;
     }
     if (!this._list.length) {
-      root.innerHTML = `<div class="empty">No Proxmox VMs or containers found.</div>`;
+      const i = this._discoverInfo;
+      root.innerHTML = `<div class="empty">No Proxmox VMs or containers found${i ? ` (saw ${i.entities} proxmoxve entities on ${i.devices} devices)` : ""}.
+        Add guests by hand with the card editor (Edit card → Guests), or in YAML under <code>guests:</code>.</div>`;
       return;
     }
     const states = this._list.map((g) => this._guestState(g));
@@ -465,6 +472,159 @@ class ProxmoxGuestsCard extends HTMLElement {
     return this._hass.callService(domain === "switch" || domain === "input_boolean" ? domain : "homeassistant",
       key === "start" ? "turn_on" : "turn_off", data);
   }
+}
+
+
+/* ---------------- visual editor ---------------- */
+
+const EDITOR_LABELS = {
+  title: "Title", discover: "Auto-discover guests (proxmoxve integration, admin only)", compact: "Compact (hide usage bars)",
+  show_actions: "Show power buttons", show_summary: "Show running count",
+  name: "Name", type: "Type", node: "Node (optional)", status: "Status entity",
+  cpu: "CPU usage entity", memory: "Memory usage entity", disk: "Disk usage entity", uptime: "Uptime entity",
+  start: "Start button", shutdown: "Shutdown button", reboot: "Reboot button", stop: "Force stop button",
+};
+const SENSOR = { entity: { domain: ["sensor", "binary_sensor"] } };
+const CONTROL = { entity: { domain: ["button", "switch", "script"] } };
+const GENERAL_SCHEMA = [
+  { name: "title", selector: { text: {} } },
+  { name: "discover", selector: { boolean: {} } },
+  { name: "compact", selector: { boolean: {} } },
+  { name: "show_actions", selector: { boolean: {} } },
+  { name: "show_summary", selector: { boolean: {} } },
+];
+const GUEST_SCHEMA = [
+  { name: "name", selector: { text: {} } },
+  { name: "type", selector: { select: { mode: "dropdown", options: [{ value: "vm", label: "Virtual machine (QEMU)" }, { value: "lxc", label: "Container (LXC)" }] } } },
+  { name: "node", selector: { text: {} } },
+  { name: "status", selector: SENSOR },
+  { name: "cpu", selector: SENSOR },
+  { name: "memory", selector: SENSOR },
+  { name: "disk", selector: SENSOR },
+  { name: "uptime", selector: SENSOR },
+  { name: "start", selector: CONTROL },
+  { name: "shutdown", selector: CONTROL },
+  { name: "reboot", selector: CONTROL },
+  { name: "stop", selector: CONTROL },
+];
+
+class ProxmoxGuestsCardEditor extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._config = { guests: [] };
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    this.shadowRoot.querySelectorAll("ha-form").forEach((f) => (f.hass = hass));
+  }
+
+  setConfig(config) {
+    this._config = { ...config, guests: (config.guests || []).map((g) => ({ ...g })) };
+    this._build();
+  }
+
+  _emit() {
+    const cfg = { ...this._config };
+    cfg.guests = cfg.guests.map((g) => {
+      const o = {};
+      Object.entries(g).forEach(([k, v]) => { if (!k.startsWith("_") && v !== "" && v !== undefined && v !== null) o[k] = v; });
+      return o;
+    });
+    this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: cfg }, bubbles: true, composed: true }));
+  }
+
+  _form(schema, data, onChange) {
+    const f = document.createElement("ha-form");
+    f.hass = this._hass;
+    f.schema = schema;
+    f.data = data;
+    f.computeLabel = (s) => EDITOR_LABELS[s.name] || s.name;
+    f.addEventListener("value-changed", (ev) => {
+      ev.stopPropagation();
+      onChange(ev.detail.value);
+      f.data = ev.detail.value;
+      this._emit();
+    });
+    return f;
+  }
+
+  _build() {
+    const root = this.shadowRoot;
+    root.innerHTML = `<style>
+      :host { display: block; }
+      .guest { border: 1px solid var(--divider-color); border-radius: 12px; margin: 12px 0; overflow: hidden; }
+      .guest > summary { display: flex; align-items: center; gap: 8px; padding: 10px 14px; cursor: pointer;
+        font-weight: 500; background: var(--secondary-background-color); list-style: none; }
+      .guest > summary::-webkit-details-marker { display: none; }
+      .guest > summary .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .body { padding: 12px 14px 14px; }
+      button { font: inherit; cursor: pointer; border-radius: 8px; padding: 6px 12px; border: 1px solid var(--divider-color);
+        background: var(--card-background-color); color: var(--primary-text-color); }
+      button.primary { background: var(--primary-color); color: var(--text-primary-color, #fff); border-color: transparent; }
+      button.del { color: var(--error-color, #db4437); }
+      .hint { color: var(--secondary-text-color); font-size: .85rem; margin: 8px 0 0; }
+      h3 { margin: 18px 0 0; font-weight: 500; font-size: 1rem; }
+    </style>`;
+
+    root.appendChild(this._form(GENERAL_SCHEMA, {
+      title: this._config.title ?? "Proxmox", discover: !!this._config.discover, compact: !!this._config.compact,
+      show_actions: this._config.show_actions !== false, show_summary: this._config.show_summary !== false,
+    }, (v) => Object.assign(this._config, v)));
+
+    const h = document.createElement("h3");
+    h.textContent = "Guests";
+    root.appendChild(h);
+    const hint = document.createElement("p");
+    hint.className = "hint";
+    hint.textContent = "Add one entry per VM or container and pick its entities. Only the name is required; leave anything you don't have empty.";
+    root.appendChild(hint);
+
+    this._config.guests.forEach((g, i) => {
+      const d = document.createElement("details");
+      d.className = "guest";
+      d.open = this._config.guests.length <= 2 || g._open;
+      const sum = document.createElement("summary");
+      const t = document.createElement("span");
+      t.className = "t";
+      const title = () => `${(g.type || "vm") === "lxc" ? "LXC" : "VM"} · ${g.name || "Unnamed guest"}`;
+      t.textContent = title();
+      const del = document.createElement("button");
+      del.className = "del";
+      del.textContent = "Remove";
+      del.addEventListener("click", (e) => {
+        e.preventDefault();
+        this._config.guests.splice(i, 1);
+        this._build();
+        this._emit();
+      });
+      sum.append(t, del);
+      const body = document.createElement("div");
+      body.className = "body";
+      body.appendChild(this._form(GUEST_SCHEMA, { type: "vm", ...g }, (v) => {
+        Object.keys(g).forEach((k) => delete g[k]);
+        Object.assign(g, v);
+        t.textContent = title();
+      }));
+      d.append(sum, body);
+      root.appendChild(d);
+    });
+
+    const add = document.createElement("button");
+    add.className = "primary";
+    add.textContent = "+ Add guest";
+    add.addEventListener("click", () => {
+      this._config.guests.push({ name: `Guest ${this._config.guests.length + 1}`, type: "vm", _open: true });
+      this._build();
+      this._emit();
+    });
+    root.appendChild(add);
+  }
+}
+
+if (!customElements.get("proxmox-guests-card-editor")) {
+  customElements.define("proxmox-guests-card-editor", ProxmoxGuestsCardEditor);
 }
 
 if (!customElements.get("proxmox-guests-card")) {
