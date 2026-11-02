@@ -38,7 +38,7 @@
  *     shutdown: button.pve1_lxc_pihole_shutdown
  */
 
-const PGC_VERSION = "1.0.0";
+const PGC_VERSION = "1.6.0";
 
 const ACTIONS = [
   { key: "start", icon: "mdi:play", label: "Start", when: ["stopped"], confirm: false },
