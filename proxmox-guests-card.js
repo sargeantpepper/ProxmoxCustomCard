@@ -115,11 +115,11 @@ class ProxmoxGuestsCard extends HTMLElement {
         }
         .meter { display: flex; align-items: center; gap: 6px; flex: 1 1 110px; min-width: 110px; }
         .meter .lbl { width: 30px; flex: none; }
-        .bar { flex: 1; height: 6px; border-radius: 3px; background: var(--divider-color); overflow: hidden; }
+        .bar { flex: 1; height: 6px; border-radius: 3px; background: color-mix(in srgb, var(--secondary-text-color) 28%, transparent); overflow: hidden; }
         .bar > span { display: block; height: 100%; border-radius: 3px; background: var(--primary-color); transition: width .4s; }
         .bar > span.warn { background: var(--warning-color, #ffa000); }
         .bar > span.crit { background: var(--error-color, #db4437); }
-        .meter .val { width: 42px; text-align: right; flex: none; }
+        .meter .val { min-width: 4ch; text-align: left; flex: none; font-variant-numeric: tabular-nums; }
         .chip { display: inline-flex; gap: 4px; align-items: center; flex: none; }
         .chip ha-icon { --mdc-icon-size: 14px; }
         .compact .row { padding: 6px 8px; }
