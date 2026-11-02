@@ -83,7 +83,7 @@ class ProxmoxGuestsCard extends HTMLElement {
           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .pill {
           flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 999px;
-          font-size: .85rem; font-weight: 600; white-space: nowrap; color: var(--tone);
+          font-size: .85rem; font-weight: 600; white-space: nowrap; color: color-mix(in srgb, var(--tone) 68%, var(--primary-text-color));
           background: color-mix(in srgb, var(--tone) 16%, transparent);
         }
         .pill ha-icon { --mdc-icon-size: 18px; }
@@ -140,7 +140,7 @@ class ProxmoxGuestsCard extends HTMLElement {
           display: flex; align-items: center; justify-content: center; gap: 10px;
           width: calc(100% - 16px); box-sizing: border-box; margin: 8px 8px 4px; padding: 14px 16px;
           border: none; border-radius: 14px; font: inherit; font-weight: 500; cursor: pointer;
-          color: var(--tone); background: color-mix(in srgb, var(--tone) 14%, transparent);
+          color: color-mix(in srgb, var(--tone) 68%, var(--primary-text-color)); background: color-mix(in srgb, var(--tone) 14%, transparent);
           transition: background .15s;
         }
         .fold.ok { --tone: var(--success-color, #43a047); }
@@ -464,11 +464,11 @@ class ProxmoxGuestsCard extends HTMLElement {
     const tone = running === 0 ? "off" : count("paused") + count("unavailable") ? "warn" : "ok";
     const subtitle = running === total ? "Everything running"
       : running === 0 && count("stopped") === total ? "All guests stopped" : parts.join(" · ");
-    const headIcon = tone === "ok" ? "mdi:check-circle-outline" : tone === "warn" ? "mdi:alert-circle-outline" : "mdi:power-sleep";
+    const headIcon = c.icon || (tone === "ok" ? "mdi:check-circle-outline" : tone === "warn" ? "mdi:alert-circle-outline" : "mdi:power-sleep");
 
     root.innerHTML = `
       ${c.title || c.show_summary ? `<div class="header ${tone}">
-        <div class="h-icon"><ha-icon icon="${headIcon}"></ha-icon></div>
+        <div class="h-icon"><ha-icon icon="${esc(headIcon)}"></ha-icon></div>
         <div class="h-text">
           ${c.title ? `<div class="title">${esc(c.title)}</div>` : ""}
           <div class="subtitle">${esc(subtitle)}</div>
@@ -554,7 +554,7 @@ const EDITOR_LABELS = {
   show_actions: "Show power buttons", show_summary: "Show running count",
   collapsed_title: "Title of the collapsed section", collapsed_open: "Start with the collapsed section open",
   collapsed: "Put in collapsed section",
-  name: "Name", type: "Type", node: "Node (optional)", status: "Status entity",
+  name: "Name", type: "Type", node: "Node (optional)", icon: "Icon (optional, default by type)", status: "Status entity",
   cpu: "CPU usage entity", memory: "Memory usage entity", disk: "Disk usage entity", uptime: "Uptime or last boot entity",
   start: "Start button", shutdown: "Shutdown button", reboot: "Reboot button", stop: "Force stop button",
 };
@@ -562,6 +562,7 @@ const SENSOR = { entity: { domain: ["sensor", "binary_sensor"] } };
 const CONTROL = { entity: { domain: ["button", "switch", "script"] } };
 const GENERAL_SCHEMA = [
   { name: "title", selector: { text: {} } },
+  { name: "icon", selector: { icon: {} } },
   { name: "discover", selector: { boolean: {} } },
   { name: "compact", selector: { boolean: {} } },
   { name: "show_actions", selector: { boolean: {} } },
@@ -573,6 +574,7 @@ const GUEST_SCHEMA = [
   { name: "name", selector: { text: {} } },
   { name: "type", selector: { select: { mode: "dropdown", options: [{ value: "vm", label: "Virtual machine (QEMU)" }, { value: "lxc", label: "Container (LXC)" }] } } },
   { name: "node", selector: { text: {} } },
+  { name: "icon", selector: { icon: {} } },
   { name: "collapsed", selector: { boolean: {} } },
   { name: "status", selector: SENSOR },
   { name: "cpu", selector: SENSOR },
@@ -624,12 +626,12 @@ class ProxmoxGuestsCardEditor extends HTMLElement {
     this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: cfg }, bubbles: true, composed: true }));
   }
 
-  _form(schema, data, onChange) {
+  _form(schema, data, onChange, labels = EDITOR_LABELS) {
     const f = document.createElement("ha-form");
     f.hass = this._hass;
     f.schema = schema;
     f.data = data;
-    f.computeLabel = (s) => EDITOR_LABELS[s.name] || s.name;
+    f.computeLabel = (s) => labels[s.name] || s.name;
     f.addEventListener("value-changed", (ev) => {
       ev.stopPropagation();
       onChange(ev.detail.value);
@@ -666,10 +668,10 @@ class ProxmoxGuestsCardEditor extends HTMLElement {
     </style>`;
 
     root.appendChild(this._form(GENERAL_SCHEMA, {
-      title: this._config.title ?? "Proxmox", discover: !!this._config.discover, compact: !!this._config.compact,
+      title: this._config.title ?? "Proxmox", icon: this._config.icon, discover: !!this._config.discover, compact: !!this._config.compact,
       show_actions: this._config.show_actions !== false, show_summary: this._config.show_summary !== false,
       collapsed_title: this._config.collapsed_title ?? "More guests", collapsed_open: !!this._config.collapsed_open,
-    }, (v) => Object.assign(this._config, v)));
+    }, (v) => Object.assign(this._config, v), { ...EDITOR_LABELS, icon: "Header icon (empty = status icon)" }));
 
     const h = document.createElement("h3");
     h.textContent = "Guests";

@@ -72,6 +72,7 @@ Entity IDs above are examples; check yours under Developer Tools → States. Eve
 | Option | Default | Description |
 |---|---|---|
 | `title` | `Proxmox` | Card title |
+| `icon` | status icon | Header icon, for example `mdi:server-network`. By default it follows status (check, alert or power-sleep). |
 | `discover` | `false` | Auto-discover guests from the proxmoxve integration |
 | `include` | | Regex; only discovered guests whose name matches |
 | `exclude` | | Regex; hide discovered guests whose name matches |
