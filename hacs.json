@@ -1,0 +1,5 @@
+{
+  "name": "Proxmox Guests Card",
+  "filename": "proxmox-guests-card.js",
+  "render_readme": true
+}

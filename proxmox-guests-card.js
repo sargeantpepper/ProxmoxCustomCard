@@ -1,0 +1,480 @@
+/**
+ * proxmox-guests-card
+ * Status + controls for Proxmox VMs and LXC containers in Home Assistant.
+ *
+ * No dependencies. Works with any integration that exposes the guests as
+ * entities (e.g. the HACS "ha-proxmoxve" integration or the core Proxmox VE one):
+ * you simply map each guest to the entities you want to show.
+ *
+ * Easiest (dougiteixeira/proxmoxve, needs an admin user):
+ *
+ * type: custom:proxmox-guests-card
+ * discover: true
+ * # optional: include: "^web|db", exclude: "template", type: lxc
+ * # optional per-guest overrides: guests: [{ match: "Pi-hole", name: "DNS", node: "pve1" }]
+ *
+ * Or map entities manually:
+ *
+ * type: custom:proxmox-guests-card
+ * title: Proxmox
+ * guests:
+ *   - name: Home Assistant
+ *     type: vm                       # vm | lxc  (icon only)
+ *     node: pve1                     # optional subtitle
+ *     status: binary_sensor.pve1_vm_homeassistant_status
+ *     cpu: sensor.pve1_vm_homeassistant_cpu_usage
+ *     memory: sensor.pve1_vm_homeassistant_memory_usage_percentage
+ *     uptime: sensor.pve1_vm_homeassistant_uptime
+ *     start: button.pve1_vm_homeassistant_start
+ *     shutdown: button.pve1_vm_homeassistant_shutdown
+ *     reboot: button.pve1_vm_homeassistant_reboot
+ *     stop: button.pve1_vm_homeassistant_stop
+ *   - name: Pi-hole
+ *     type: lxc
+ *     status: binary_sensor.pve1_lxc_pihole_status
+ *     cpu: sensor.pve1_lxc_pihole_cpu_usage
+ *     memory: sensor.pve1_lxc_pihole_memory_usage_percentage
+ *     start: button.pve1_lxc_pihole_start
+ *     shutdown: button.pve1_lxc_pihole_shutdown
+ */
+
+const PGC_VERSION = "1.0.0";
+
+const ACTIONS = [
+  { key: "start", icon: "mdi:play", label: "Start", when: ["stopped"], confirm: false },
+  { key: "shutdown", icon: "mdi:power", label: "Shutdown", when: ["running"], confirm: true },
+  { key: "reboot", icon: "mdi:restart", label: "Reboot", when: ["running"], confirm: true },
+  { key: "stop", icon: "mdi:stop", label: "Force stop", when: ["running", "paused"], confirm: true, danger: true },
+];
+
+const RUNNING_STATES = ["on", "running", "online", "true", "started"];
+const STOPPED_STATES = ["off", "stopped", "offline", "false", "shutdown"];
+const BAD_STATES = ["unavailable", "unknown", "none", ""];
+
+const esc = (s) =>
+  String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+class ProxmoxGuestsCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._armed = null; // { id, timer } – action waiting for second click
+    this._sig = "";
+    this._busy = new Set();
+
+    this.shadowRoot.innerHTML = `
+      <style>
+        :host { display: block; }
+        ha-card { overflow: hidden; }
+        .header {
+          display: flex; align-items: center; justify-content: space-between;
+          padding: 16px 16px 4px; gap: 8px;
+        }
+        .title { font-size: 1.25rem; font-weight: 500; color: var(--primary-text-color); }
+        .summary { font-size: .85rem; color: var(--secondary-text-color); white-space: nowrap; }
+        .summary b { color: var(--success-color, #43a047); font-weight: 600; }
+        .list { padding: 4px 8px 8px; }
+        .row {
+          display: grid; grid-template-columns: 40px 1fr auto; align-items: center;
+          gap: 4px 12px; padding: 10px 8px; border-radius: 12px;
+        }
+        .row + .row { border-top: 1px solid var(--divider-color); border-radius: 0; }
+        .icon-wrap {
+          position: relative; width: 40px; height: 40px; border-radius: 50%;
+          display: flex; align-items: center; justify-content: center;
+          background: color-mix(in srgb, var(--state-color) 15%, transparent);
+          color: var(--state-color); cursor: pointer;
+        }
+        .dot {
+          position: absolute; right: 0; bottom: 0; width: 11px; height: 11px; border-radius: 50%;
+          background: var(--state-color); border: 2px solid var(--card-background-color, #fff);
+        }
+        .running { --state-color: var(--success-color, #43a047); }
+        .stopped { --state-color: var(--disabled-text-color, #9e9e9e); }
+        .unavailable, .paused { --state-color: var(--warning-color, #ffa000); }
+        .info { min-width: 0; cursor: pointer; }
+        .name { font-weight: 500; color: var(--primary-text-color); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .sub { font-size: .8rem; color: var(--secondary-text-color); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .actions { display: flex; gap: 2px; }
+        .btn {
+          --size: 34px; width: var(--size); height: var(--size); border-radius: 50%;
+          border: none; background: transparent; color: var(--secondary-text-color);
+          display: inline-flex; align-items: center; justify-content: center;
+          cursor: pointer; padding: 0; transition: background .15s, color .15s;
+        }
+        .btn:hover { background: var(--secondary-background-color); color: var(--primary-text-color); }
+        .btn.danger:hover { color: var(--error-color, #db4437); }
+        .btn.armed { background: var(--warning-color, #ffa000); color: #fff; animation: pulse 1s infinite; }
+        .btn.armed.danger { background: var(--error-color, #db4437); }
+        .btn.busy { opacity: .4; pointer-events: none; }
+        .btn.start { color: var(--success-color, #43a047); }
+        @keyframes pulse { 50% { opacity: .65; } }
+        .meters {
+          grid-column: 2 / 4; display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
+          font-size: .75rem; color: var(--secondary-text-color); margin-top: 2px;
+        }
+        .meter { display: flex; align-items: center; gap: 6px; flex: 1 1 110px; min-width: 110px; }
+        .meter .lbl { width: 30px; flex: none; }
+        .bar { flex: 1; height: 6px; border-radius: 3px; background: var(--divider-color); overflow: hidden; }
+        .bar > span { display: block; height: 100%; border-radius: 3px; background: var(--primary-color); transition: width .4s; }
+        .bar > span.warn { background: var(--warning-color, #ffa000); }
+        .bar > span.crit { background: var(--error-color, #db4437); }
+        .meter .val { width: 42px; text-align: right; flex: none; }
+        .chip { display: inline-flex; gap: 4px; align-items: center; flex: none; }
+        .chip ha-icon { --mdc-icon-size: 14px; }
+        .compact .row { padding: 6px 8px; }
+        .compact .meters { display: none; }
+        .empty, .err { padding: 16px; color: var(--secondary-text-color); }
+        .err { color: var(--error-color, #db4437); }
+      </style>
+      <ha-card><div id="root"></div></ha-card>`;
+
+    this.shadowRoot.getElementById("root").addEventListener("click", (e) => this._onClick(e));
+  }
+
+  /* ---------- HA card API ---------- */
+
+  setConfig(config) {
+    if (!config) throw new Error("Invalid configuration.");
+    if (!config.discover && (!Array.isArray(config.guests) || config.guests.length === 0)) {
+      throw new Error("Set `discover: true` or define a `guests` list.");
+    }
+    (config.guests || []).forEach((g, i) => {
+      if (!g.status && !g.name) throw new Error(`guests[${i}] needs at least a name or a status entity.`);
+    });
+    this._config = {
+      title: "Proxmox",
+      compact: false,
+      show_actions: true,
+      show_summary: true,
+      discover: false,
+      warn_at: 75,
+      crit_at: 90,
+      ...config,
+    };
+    this._sig = "";
+    this._discovered = null;
+    this._discovering = false;
+    this._discoverError = null;
+    this._render();
+  }
+
+  get _list() {
+    const manual = this._config?.guests || [];
+    if (!this._config?.discover) return manual;
+    return this._merged || [];
+  }
+
+  set hass(hass) {
+    const first = !this._hass;
+    this._hass = hass;
+    if (!this._config) return;
+    if (this._config.discover && !this._discovered && !this._discovering) this._discover();
+    if (first) this._sig = "";
+    const sig = this._signature();
+    if (sig !== this._sig) {
+      this._sig = sig;
+      this._render();
+    }
+  }
+
+  getCardSize() {
+    return 1 + (this._list.length || 1) * (this._config?.compact ? 1 : 2);
+  }
+
+  getGridOptions() {
+    return { columns: 12, min_columns: 6, rows: "auto" };
+  }
+
+  static getStubConfig(hass) {
+    return {
+      title: "Proxmox",
+      discover: true,
+    };
+  }
+
+  /* ---------- auto-discovery (dougiteixeira/proxmoxve) ---------- */
+
+  async _discover() {
+    this._discovering = true;
+    try {
+      const [ents, devs] = await Promise.all([
+        this._hass.callWS({ type: "config/entity_registry/list" }),
+        this._hass.callWS({ type: "config/device_registry/list" }),
+      ]);
+      const devById = Object.fromEntries(devs.map((d) => [d.id, d]));
+      const byDevice = {};
+      ents.filter((e) => e.platform === "proxmoxve" && e.device_id && !e.disabled_by)
+        .forEach((e) => (byDevice[e.device_id] ||= []).push(e));
+
+      const guests = [];
+      for (const [devId, list] of Object.entries(byDevice)) {
+        const text = list.map((e) => e.entity_id).join(" ");
+        const m = text.match(/(?:^|[._])(qemu|lxc)[_.]/i);
+        if (!m) continue; // node / storage / cluster devices
+        const g = { type: m[1].toLowerCase() === "lxc" ? "lxc" : "vm", _device: devId };
+        const dev = devById[devId];
+        g.name = dev?.name_by_user || dev?.name || list[0].original_name;
+        const pick = {};
+        const set = (k, e, score) => { if (!pick[k] || score > pick[k].score) pick[k] = { id: e.entity_id, score }; };
+        for (const e of list) {
+          const dom = e.entity_id.split(".")[0];
+          const t = (e.translation_key || e.entity_id.split(".")[1] || "").toLowerCase();
+          if (dom === "button") {
+            const b = t.match(/(?:^|_)(start|stop|shutdown|reboot)$/);
+            if (b) set(b[1], e, 1);
+          } else if (dom === "sensor") {
+            if (/status(_raw)?$/.test(t)) set("status", e, /_raw$/.test(t) ? 1 : 2);
+            else if (/cpu_used$|^cpu$/.test(t) && !/host/.test(t)) set("cpu", e, 1);
+            else if (/uptime/.test(t)) set("uptime", e, 1);
+            else if (/memory/.test(t) && !/free|total|max|host/.test(t)) set("memory", e, 1);
+            else if (/disk/.test(t) && !/read|write|total|free|max|io|host/.test(t)) set("disk", e, 1);
+          }
+        }
+        Object.entries(pick).forEach(([k, v]) => (g[k] = v.id));
+        if (g.status) guests.push(g);
+      }
+      guests.sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { numeric: true }));
+      this._discovered = guests;
+      this._discoverError = null;
+    } catch (err) {
+      this._discovered = [];
+      this._discoverError = err?.message || String(err);
+    }
+    this._discovering = false;
+    this._applyDiscovery();
+    this._sig = "";
+    if (this._hass) this._render();
+  }
+
+  _applyDiscovery() {
+    const c = this._config;
+    const test = (re, v) => { try { return new RegExp(re, "i").test(v || ""); } catch { return false; } };
+    let list = (this._discovered || []).filter((g) =>
+      (!c.include || test(c.include, g.name)) && (!c.exclude || !test(c.exclude, g.name)) &&
+      (!c.type || c.type === g.type));
+    // Manual `guests` entries override discovered ones with the same name.
+    const overrides = c.guests || [];
+    list = list.map((g) => {
+      const o = overrides.find((x) => String(x.match || x.name).toLowerCase() === String(g.name).toLowerCase());
+      return o ? { ...g, ...o } : g;
+    });
+    this._merged = list;
+  }
+
+  /* ---------- helpers ---------- */
+
+  _entityIds() {
+    const ids = [];
+    (this._list || []).forEach((g) => {
+      ["status", "cpu", "memory", "disk", "uptime", ...ACTIONS.map((a) => a.key)].forEach((k) => g[k] && ids.push(g[k]));
+    });
+    return ids;
+  }
+
+  _signature() {
+    const s = this._hass.states;
+    return this._entityIds().map((id) => {
+      const st = s[id];
+      return st ? `${st.state}|${st.last_changed}` : "-";
+    }).join(";") + (this._armed ? "#" + this._armed.id : "") + "#" + [...this._busy].join(",");
+  }
+
+  _guestState(g) {
+    const st = g.status ? this._hass.states[g.status] : null;
+    if (!st) return "unavailable";
+    const v = String(st.state).toLowerCase();
+    if (BAD_STATES.includes(v)) return "unavailable";
+    if (RUNNING_STATES.includes(v)) return "running";
+    if (STOPPED_STATES.includes(v)) return "stopped";
+    return "paused"; // suspended, paused, prelaunch, io-error, ...
+  }
+
+  _metric(id) {
+    if (!id) return null;
+    const st = this._hass.states[id];
+    if (!st) return null;
+    const v = parseFloat(st.state);
+    if (isNaN(v)) return null;
+    const unit = st.attributes.unit_of_measurement || "";
+    return { v, unit, isPct: unit === "%" };
+  }
+
+  _uptime(id) {
+    if (!id) return null;
+    const st = this._hass.states[id];
+    if (!st || BAD_STATES.includes(String(st.state).toLowerCase())) return null;
+    let secs;
+    if (st.attributes.device_class === "timestamp" || /^\d{4}-\d\d-\d\dT/.test(st.state)) {
+      secs = (Date.now() - new Date(st.state).getTime()) / 1000;
+    } else {
+      const n = parseFloat(st.state);
+      if (isNaN(n)) return null;
+      const mult = { s: 1, min: 60, h: 3600, d: 86400 }[st.attributes.unit_of_measurement] ?? 1;
+      secs = n * mult;
+    }
+    if (!isFinite(secs) || secs < 0) return null;
+    const d = Math.floor(secs / 86400), h = Math.floor((secs % 86400) / 3600), m = Math.floor((secs % 3600) / 60);
+    return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+  }
+
+  _meter(label, m) {
+    if (!m) return "";
+    const { warn_at, crit_at } = this._config;
+    if (!m.isPct) {
+      return `<span class="chip">${esc(label)} ${esc(Math.round(m.v * 10) / 10)}${esc(m.unit)}</span>`;
+    }
+    const pct = Math.max(0, Math.min(100, m.v));
+    const cls = pct >= crit_at ? "crit" : pct >= warn_at ? "warn" : "";
+    return `<div class="meter"><span class="lbl">${label}</span>
+      <div class="bar"><span class="${cls}" style="width:${pct}%"></span></div>
+      <span class="val">${Math.round(pct)}%</span></div>`;
+  }
+
+  /* ---------- render ---------- */
+
+  _render() {
+    const root = this.shadowRoot.getElementById("root");
+    if (!root || !this._config) return;
+    if (!this._hass) {
+      root.innerHTML = `<div class="empty">Loading…</div>`;
+      return;
+    }
+    const c = this._config;
+    if (c.discover && !this._discovered) {
+      root.innerHTML = `<div class="empty">Discovering Proxmox guests…</div>`;
+      return;
+    }
+    if (c.discover && this._discoverError) {
+      root.innerHTML = `<div class="err">Auto-discovery failed (${esc(this._discoverError)}). It needs an admin user; otherwise list the guests manually under <code>guests:</code>.</div>`;
+      return;
+    }
+    if (!this._list.length) {
+      root.innerHTML = `<div class="empty">No Proxmox VMs or containers found.</div>`;
+      return;
+    }
+    const states = this._list.map((g) => this._guestState(g));
+    const running = states.filter((s) => s === "running").length;
+
+    const rows = this._list.map((g, i) => {
+      const state = states[i];
+      const type = String(g.type || "vm").toLowerCase();
+      const icon = g.icon || (type === "lxc" ? "mdi:cube-outline" : "mdi:server");
+      const name = g.name || this._hass.states[g.status]?.attributes.friendly_name || g.status;
+      const up = state === "running" ? this._uptime(g.uptime) : null;
+      const raw = String(this._hass.states[g.status]?.state || "");
+      const label = state === "unavailable" ? "Unavailable" : state === "running" ? "Running" : state === "stopped" ? "Stopped"
+        : raw.charAt(0).toUpperCase() + raw.slice(1).replace(/[_-]/g, " ");
+      const subParts = [type.toUpperCase(), g.node, label];
+      if (up) subParts.push(`up ${up}`);
+
+      const meters = state === "running"
+        ? [this._meter("CPU", this._metric(g.cpu)), this._meter("RAM", this._metric(g.memory)), this._meter("Disk", this._metric(g.disk))].join("")
+        : "";
+
+      const actions = c.show_actions
+        ? ACTIONS.filter((a) => g[a.key] && (a.when.includes(state) || state === "unavailable" && a.key === "start"))
+            .map((a) => {
+              const id = `${i}:${a.key}`;
+              const armed = this._armed?.id === id;
+              const busy = this._busy.has(id);
+              return `<button class="btn ${a.key} ${a.danger ? "danger" : ""} ${armed ? "armed" : ""} ${busy ? "busy" : ""}"
+                  data-guest="${i}" data-action="${a.key}"
+                  title="${armed ? "Click again to confirm" : esc(a.label)}">
+                  <ha-icon icon="${armed ? "mdi:check" : a.icon}"></ha-icon></button>`;
+            }).join("")
+        : "";
+
+      return `<div class="row ${state}">
+        <div class="icon-wrap" data-more="${i}"><ha-icon icon="${esc(icon)}"></ha-icon><span class="dot"></span></div>
+        <div class="info" data-more="${i}">
+          <div class="name">${esc(name)}</div>
+          <div class="sub">${esc(subParts.filter(Boolean).join(" · "))}</div>
+        </div>
+        <div class="actions">${actions}</div>
+        ${meters ? `<div class="meters">${meters}</div>` : ""}
+      </div>`;
+    }).join("");
+
+    root.innerHTML = `
+      ${c.title || c.show_summary ? `<div class="header">
+        <div class="title">${esc(c.title)}</div>
+        ${c.show_summary ? `<div class="summary"><b>${running}</b> / ${this._list.length} running</div>` : ""}
+      </div>` : ""}
+      <div class="list ${c.compact ? "compact" : ""}">${rows}</div>`;
+  }
+
+  /* ---------- interaction ---------- */
+
+  _onClick(e) {
+    const btn = e.target.closest("[data-action]");
+    if (btn) {
+      e.stopPropagation();
+      this._handleAction(Number(btn.dataset.guest), btn.dataset.action);
+      return;
+    }
+    const more = e.target.closest("[data-more]");
+    if (more) {
+      const g = this._list[Number(more.dataset.more)];
+      const entityId = g.status || g.cpu || g.memory;
+      if (entityId) {
+        this.dispatchEvent(new CustomEvent("hass-more-info", { detail: { entityId }, bubbles: true, composed: true }));
+      }
+    }
+  }
+
+  _handleAction(i, key) {
+    const g = this._list[i];
+    const action = ACTIONS.find((a) => a.key === key);
+    const entityId = g[key];
+    if (!action || !entityId) return;
+    const id = `${i}:${key}`;
+
+    if (action.confirm && this._armed?.id !== id) {
+      clearTimeout(this._armed?.timer);
+      this._armed = { id, timer: setTimeout(() => { this._armed = null; this._sig = ""; this._render(); }, 3500) };
+      this._render();
+      return;
+    }
+    clearTimeout(this._armed?.timer);
+    this._armed = null;
+
+    this._busy.add(id);
+    this._render();
+    this._call(entityId, key)
+      .catch((err) => {
+        console.error("proxmox-guests-card:", err);
+        this.dispatchEvent(new CustomEvent("hass-notification", {
+          detail: { message: `Failed to ${action.label.toLowerCase()} ${g.name || entityId}: ${err.message || err}` },
+          bubbles: true, composed: true,
+        }));
+      })
+      .finally(() => {
+        // Keep the spinner-ish state briefly; Proxmox takes a moment to update state.
+        setTimeout(() => { this._busy.delete(id); this._sig = ""; this._render(); }, 4000);
+      });
+  }
+
+  _call(entityId, key) {
+    const domain = entityId.split(".")[0];
+    const data = { entity_id: entityId };
+    if (domain === "button" || domain === "input_button") return this._hass.callService(domain, "press", data);
+    if (domain === "script") return this._hass.callService("script", "turn_on", data);
+    if (domain === "scene") return this._hass.callService("scene", "turn_on", data);
+    // switch-style entities: start => on, everything else => off
+    return this._hass.callService(domain === "switch" || domain === "input_boolean" ? domain : "homeassistant",
+      key === "start" ? "turn_on" : "turn_off", data);
+  }
+}
+
+if (!customElements.get("proxmox-guests-card")) {
+  customElements.define("proxmox-guests-card", ProxmoxGuestsCard);
+}
+window.customCards = window.customCards || [];
+window.customCards.push({
+  type: "proxmox-guests-card",
+  name: "Proxmox Guests",
+  description: "Status, resource usage and power controls for Proxmox VMs and LXC containers.",
+  preview: false,
+});
+console.info(`%c PROXMOX-GUESTS-CARD %c ${PGC_VERSION} `, "background:#e57000;color:#fff;font-weight:700", "background:#333;color:#fff");
