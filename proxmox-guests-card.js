@@ -67,12 +67,26 @@ class ProxmoxGuestsCard extends HTMLElement {
         :host { display: block; }
         ha-card { overflow: hidden; }
         .header {
-          display: flex; align-items: center; justify-content: space-between;
-          padding: 16px 16px 4px; gap: 8px;
+          display: flex; align-items: center; gap: 12px; padding: 16px 16px 6px;
         }
-        .title { font-size: 1.25rem; font-weight: 500; color: var(--primary-text-color); }
-        .summary { font-size: .85rem; color: var(--secondary-text-color); white-space: nowrap; }
-        .summary b { color: var(--success-color, #43a047); font-weight: 600; }
+        .header.ok { --tone: var(--success-color, #43a047); }
+        .header.warn { --tone: var(--warning-color, #ffa000); }
+        .header.off { --tone: var(--disabled-text-color, #9e9e9e); }
+        .h-icon {
+          flex: none; width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center;
+          background: color-mix(in srgb, var(--secondary-text-color) 16%, transparent); color: var(--tone);
+        }
+        .h-text { flex: 1; min-width: 0; }
+        .title { font-size: 1.05rem; font-weight: 600; color: var(--primary-text-color); line-height: 1.25;
+          overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .subtitle { font-size: .875rem; color: var(--secondary-text-color); line-height: 1.3;
+          overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .pill {
+          flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 999px;
+          font-size: .85rem; font-weight: 600; white-space: nowrap; color: var(--tone);
+          background: color-mix(in srgb, var(--tone) 16%, transparent);
+        }
+        .pill ha-icon { --mdc-icon-size: 18px; }
         .list { padding: 4px 8px 8px; }
         .row {
           display: grid; grid-template-columns: 40px 1fr auto; align-items: center;
@@ -432,10 +446,26 @@ class ProxmoxGuestsCard extends HTMLElement {
       </button>
       ${foldOpen ? `<div class="foldbody">${folded.map((r) => r.html).join("")}</div>` : ""}` : "";
 
+    const total = this._list.length;
+    const count = (st) => states.filter((x) => x === st).length;
+    const parts = [];
+    if (count("stopped")) parts.push(`${count("stopped")} stopped`);
+    if (count("paused")) parts.push(`${count("paused")} paused`);
+    if (count("unavailable")) parts.push(`${count("unavailable")} unavailable`);
+    // Stopped guests are usually intentional; only paused/unavailable ones turn the header amber.
+    const tone = running === 0 ? "off" : count("paused") + count("unavailable") ? "warn" : "ok";
+    const subtitle = running === total ? "Everything running"
+      : running === 0 && count("stopped") === total ? "All guests stopped" : parts.join(" · ");
+    const headIcon = tone === "ok" ? "mdi:check-circle-outline" : tone === "warn" ? "mdi:alert-circle-outline" : "mdi:power-sleep";
+
     root.innerHTML = `
-      ${c.title || c.show_summary ? `<div class="header">
-        <div class="title">${esc(c.title)}</div>
-        ${c.show_summary ? `<div class="summary"><b>${running}</b> / ${this._list.length} running</div>` : ""}
+      ${c.title || c.show_summary ? `<div class="header ${tone}">
+        <div class="h-icon"><ha-icon icon="${headIcon}"></ha-icon></div>
+        <div class="h-text">
+          ${c.title ? `<div class="title">${esc(c.title)}</div>` : ""}
+          <div class="subtitle">${esc(subtitle)}</div>
+        </div>
+        ${c.show_summary ? `<div class="pill"><ha-icon icon="mdi:server"></ha-icon><span>${running} / ${total} running</span></div>` : ""}
       </div>` : ""}
       <div class="list ${c.compact ? "compact" : ""}">${main.map((r) => r.html).join("")}${foldHtml}</div>`;
   }
