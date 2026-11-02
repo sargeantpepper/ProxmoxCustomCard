@@ -122,6 +122,17 @@ class ProxmoxGuestsCard extends HTMLElement {
         .meter .val { min-width: 4ch; text-align: left; flex: none; font-variant-numeric: tabular-nums; }
         .chip { display: inline-flex; gap: 4px; align-items: center; flex: none; }
         .chip ha-icon { --mdc-icon-size: 14px; }
+        .fold {
+          display: flex; align-items: center; gap: 8px; width: 100%; box-sizing: border-box;
+          margin: 0; padding: 10px 8px; border: none; border-top: 1px solid var(--divider-color);
+          background: transparent; color: var(--secondary-text-color); font: inherit; font-size: .9rem;
+          cursor: pointer; text-align: left;
+        }
+        .fold:hover { color: var(--primary-text-color); }
+        .fold .ft { flex: 1; font-weight: 500; }
+        .fold .fc { font-size: .8rem; }
+        .fold ha-icon { --mdc-icon-size: 20px; transition: transform .2s; }
+        .fold.open ha-icon { transform: rotate(180deg); }
         .compact .row { padding: 6px 8px; }
         .compact .meters { display: none; }
         .empty, .err { padding: 16px; color: var(--secondary-text-color); }
@@ -140,13 +151,15 @@ class ProxmoxGuestsCard extends HTMLElement {
       throw new Error("Set `discover: true` or define a `guests` list.");
     }
     (config.guests || []).forEach((g, i) => {
-      if (!g.status && !g.name) throw new Error(`guests[${i}] needs at least a name or a status entity.`);
+      if (!g.status && !g.name && !g.match) throw new Error(`guests[${i}] needs at least a name, a match or a status entity.`);
     });
     this._config = {
       title: "Proxmox",
       compact: false,
       show_actions: true,
       show_summary: true,
+      collapsed_title: "More guests",
+      collapsed_open: false,
       discover: false,
       warn_at: 75,
       crit_at: 90,
@@ -397,7 +410,7 @@ class ProxmoxGuestsCard extends HTMLElement {
             }).join("")
         : "";
 
-      return `<div class="row ${state}">
+      const html = `<div class="row ${state}">
         <div class="icon-wrap" data-more="${i}"><ha-icon icon="${esc(icon)}"></ha-icon><span class="dot"></span></div>
         <div class="info" data-more="${i}">
           <div class="name">${esc(name)}</div>
@@ -406,14 +419,25 @@ class ProxmoxGuestsCard extends HTMLElement {
         <div class="actions">${actions}</div>
         ${meters ? `<div class="meters">${meters}</div>` : ""}
       </div>`;
-    }).join("");
+      return { html, folded: !!g.collapsed, running: state === "running" };
+    });
+    const main = rows.filter((r) => !r.folded);
+    const folded = rows.filter((r) => r.folded);
+    const foldOpen = this._foldOpen ?? !!c.collapsed_open;
+    const foldHtml = folded.length ? `
+      <button class="fold ${foldOpen ? "open" : ""}" data-fold aria-expanded="${foldOpen}">
+        <span class="ft">${esc(c.collapsed_title)}</span>
+        <span class="fc">${folded.length} · ${folded.filter((r) => r.running).length} running</span>
+        <ha-icon icon="mdi:chevron-down"></ha-icon>
+      </button>
+      ${foldOpen ? `<div class="foldbody">${folded.map((r) => r.html).join("")}</div>` : ""}` : "";
 
     root.innerHTML = `
       ${c.title || c.show_summary ? `<div class="header">
         <div class="title">${esc(c.title)}</div>
         ${c.show_summary ? `<div class="summary"><b>${running}</b> / ${this._list.length} running</div>` : ""}
       </div>` : ""}
-      <div class="list ${c.compact ? "compact" : ""}">${rows}</div>`;
+      <div class="list ${c.compact ? "compact" : ""}">${main.map((r) => r.html).join("")}${foldHtml}</div>`;
   }
 
   /* ---------- interaction ---------- */
@@ -423,6 +447,11 @@ class ProxmoxGuestsCard extends HTMLElement {
     if (btn) {
       e.stopPropagation();
       this._handleAction(Number(btn.dataset.guest), btn.dataset.action);
+      return;
+    }
+    if (e.target.closest("[data-fold]")) {
+      this._foldOpen = !(this._foldOpen ?? !!this._config.collapsed_open);
+      this._render();
       return;
     }
     const more = e.target.closest("[data-more]");
@@ -485,6 +514,8 @@ class ProxmoxGuestsCard extends HTMLElement {
 const EDITOR_LABELS = {
   title: "Title", discover: "Auto-discover guests (proxmoxve integration, admin only)", compact: "Compact (hide usage bars)",
   show_actions: "Show power buttons", show_summary: "Show running count",
+  collapsed_title: "Title of the collapsed section", collapsed_open: "Start with the collapsed section open",
+  collapsed: "Put in collapsed section",
   name: "Name", type: "Type", node: "Node (optional)", status: "Status entity",
   cpu: "CPU usage entity", memory: "Memory usage entity", disk: "Disk usage entity", uptime: "Uptime or last boot entity",
   start: "Start button", shutdown: "Shutdown button", reboot: "Reboot button", stop: "Force stop button",
@@ -497,11 +528,14 @@ const GENERAL_SCHEMA = [
   { name: "compact", selector: { boolean: {} } },
   { name: "show_actions", selector: { boolean: {} } },
   { name: "show_summary", selector: { boolean: {} } },
+  { name: "collapsed_title", selector: { text: {} } },
+  { name: "collapsed_open", selector: { boolean: {} } },
 ];
 const GUEST_SCHEMA = [
   { name: "name", selector: { text: {} } },
   { name: "type", selector: { select: { mode: "dropdown", options: [{ value: "vm", label: "Virtual machine (QEMU)" }, { value: "lxc", label: "Container (LXC)" }] } } },
   { name: "node", selector: { text: {} } },
+  { name: "collapsed", selector: { boolean: {} } },
   { name: "status", selector: SENSOR },
   { name: "cpu", selector: SENSOR },
   { name: "memory", selector: SENSOR },
@@ -545,7 +579,7 @@ class ProxmoxGuestsCardEditor extends HTMLElement {
     const cfg = { ...this._config };
     cfg.guests = cfg.guests.map((g) => {
       const o = {};
-      Object.entries(g).forEach(([k, v]) => { if (!k.startsWith("_") && v !== "" && v !== undefined && v !== null) o[k] = v; });
+      Object.entries(g).forEach(([k, v]) => { if (!k.startsWith("_") && v !== "" && v !== undefined && v !== null && !(k === "collapsed" && v === false)) o[k] = v; });
       return o;
     });
     this._lastEmitted = JSON.stringify(cfg);
@@ -596,6 +630,7 @@ class ProxmoxGuestsCardEditor extends HTMLElement {
     root.appendChild(this._form(GENERAL_SCHEMA, {
       title: this._config.title ?? "Proxmox", discover: !!this._config.discover, compact: !!this._config.compact,
       show_actions: this._config.show_actions !== false, show_summary: this._config.show_summary !== false,
+      collapsed_title: this._config.collapsed_title ?? "More guests", collapsed_open: !!this._config.collapsed_open,
     }, (v) => Object.assign(this._config, v)));
 
     const h = document.createElement("h3");

@@ -77,6 +77,8 @@ Entity IDs above are examples; check yours under Developer Tools → States. Eve
 | `exclude` | | Regex; hide discovered guests whose name matches |
 | `type` | | `vm` or `lxc`; limit discovered guests to one kind |
 | `guests` | | Manual guests, or overrides for discovered ones (use `match: "<name>"`) |
+| `collapsed_title` | `More guests` | Heading of the collapsed section |
+| `collapsed_open` | `false` | Start with the collapsed section expanded |
 | `compact` | `false` | Hide the usage bars |
 | `show_actions` | `true` | Show the power buttons |
 | `show_summary` | `true` | Show the "N / total running" count |
@@ -84,9 +86,19 @@ Entity IDs above are examples; check yours under Developer Tools → States. Eve
 
 ### Per-guest fields
 
-`name`, `type`, `node`, `icon`, `status`, `cpu`, `memory`, `disk`, `uptime`, `start`, `shutdown`, `reboot`, `stop`.
+`name`, `type`, `node`, `collapsed`, `icon`, `status`, `cpu`, `memory`, `disk`, `uptime`, `start`, `shutdown`, `reboot`, `stop`.
 
 The action fields accept `button`, `switch` or `script` entities.
+
+### Collapsed section
+
+Set `collapsed: true` on any guest (or tick **Put in collapsed section** in the editor) to move it into a section at the bottom that expands when you click its header. The header shows how many guests it holds and how many are running. Guests keep their relative order within each section.
+
+```yaml
+guests:
+  - match: Windows 11   # override for an auto-discovered guest
+    collapsed: true
+```
 
 ## Notes
 
