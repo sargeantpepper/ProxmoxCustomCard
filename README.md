@@ -34,6 +34,8 @@ Built for the [dougiteixeira/proxmoxve](https://github.com/dougiteixeira/proxmox
 
 Add the card from the dashboard editor, then use **Guests → + Add guest**. Give each guest a name and type, then pick its status, CPU, memory, disk and uptime entities and its start, shutdown, reboot and stop buttons from the dropdowns. Everything except the name is optional.
 
+Reorder guests with the ↑ / ↓ buttons or by dragging the ⠿ handle. The card shows guests in the order of this list. With auto-discovery on, guests you list here come first in your chosen order and the rest follow alphabetically.
+
 ### Auto-discovery
 
 ```yaml

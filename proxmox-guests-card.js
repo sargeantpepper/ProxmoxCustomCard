@@ -262,9 +262,14 @@ class ProxmoxGuestsCard extends HTMLElement {
     const overrides = c.guests || [];
     list = list.map((g) => {
       const o = overrides.find((x) => String(x.match || x.name).toLowerCase() === String(g.name).toLowerCase());
-      return o ? { ...g, ...o } : g;
+      return o ? { ...g, ...o, _origName: g.name } : g;
     });
-    this._merged = list;
+    // Guests listed manually come first, in the order you arranged them; the rest follow alphabetically.
+    const rank = (g) => {
+      const idx = overrides.findIndex((x) => String(x.match || x.name).toLowerCase() === String(g._origName || g.name).toLowerCase());
+      return idx < 0 ? Infinity : idx;
+    };
+    this._merged = list.map((g, i) => ({ g, i })).sort((a, b) => rank(a.g) - rank(b.g) || a.i - b.i).map((x) => x.g);
   }
 
   /* ---------- helpers ---------- */
@@ -521,8 +526,19 @@ class ProxmoxGuestsCardEditor extends HTMLElement {
   }
 
   setConfig(config) {
+    // HA echoes our own config-changed back here; rebuilding would drop focus while typing.
+    if (this._lastEmitted && JSON.stringify(config) === this._lastEmitted) return;
     this._config = { ...config, guests: (config.guests || []).map((g) => ({ ...g })) };
     this._build();
+  }
+
+  _move(from, to) {
+    const gs = this._config.guests;
+    if (from === to || from < 0 || to < 0 || from >= gs.length || to >= gs.length) return;
+    const [g] = gs.splice(from, 1);
+    gs.splice(to, 0, g);
+    this._build();
+    this._emit();
   }
 
   _emit() {
@@ -532,6 +548,7 @@ class ProxmoxGuestsCardEditor extends HTMLElement {
       Object.entries(g).forEach(([k, v]) => { if (!k.startsWith("_") && v !== "" && v !== undefined && v !== null) o[k] = v; });
       return o;
     });
+    this._lastEmitted = JSON.stringify(cfg);
     this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: cfg }, bubbles: true, composed: true }));
   }
 
@@ -552,6 +569,9 @@ class ProxmoxGuestsCardEditor extends HTMLElement {
 
   _build() {
     const root = this.shadowRoot;
+    root.querySelectorAll("details.guest").forEach((d, i) => {
+      if (this._config.guests[i]) this._config.guests[i]._open = d.open;
+    });
     root.innerHTML = `<style>
       :host { display: block; }
       .guest { border: 1px solid var(--divider-color); border-radius: 12px; margin: 12px 0; overflow: hidden; }
@@ -564,6 +584,11 @@ class ProxmoxGuestsCardEditor extends HTMLElement {
         background: var(--card-background-color); color: var(--primary-text-color); }
       button.primary { background: var(--primary-color); color: var(--text-primary-color, #fff); border-color: transparent; }
       button.del { color: var(--error-color, #db4437); }
+      button.mv { padding: 2px 9px; }
+      button.mv:disabled { opacity: .35; cursor: default; }
+      .grip { cursor: grab; color: var(--secondary-text-color); font-size: 1.2rem; line-height: 1; padding: 0 4px; user-select: none; }
+      .guest.over { outline: 2px dashed var(--primary-color); outline-offset: 2px; }
+      .guest.dragging { opacity: .45; }
       .hint { color: var(--secondary-text-color); font-size: .85rem; margin: 8px 0 0; }
       h3 { margin: 18px 0 0; font-weight: 500; font-size: 1rem; }
     </style>`;
@@ -599,7 +624,41 @@ class ProxmoxGuestsCardEditor extends HTMLElement {
         this._build();
         this._emit();
       });
-      sum.append(t, del);
+      const mk = (label, title, to) => {
+        const b = document.createElement("button");
+        b.className = "mv";
+        b.textContent = label;
+        b.title = title;
+        b.disabled = to < 0 || to >= this._config.guests.length;
+        b.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); this._move(i, to); });
+        return b;
+      };
+      const grip = document.createElement("span");
+      grip.className = "grip";
+      grip.textContent = "⠿";
+      grip.title = "Drag to reorder";
+      grip.draggable = true;
+      grip.addEventListener("dragstart", (e) => {
+        this._dragIdx = i;
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", String(i));
+        e.dataTransfer.setDragImage(d, 20, 20);
+        d.classList.add("dragging");
+      });
+      grip.addEventListener("dragend", () => {
+        d.classList.remove("dragging");
+        root.querySelectorAll(".over").forEach((x) => x.classList.remove("over"));
+      });
+      grip.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); });
+      d.addEventListener("dragover", (e) => { if (this._dragIdx !== undefined) { e.preventDefault(); d.classList.add("over"); } });
+      d.addEventListener("dragleave", (e) => { if (!d.contains(e.relatedTarget)) d.classList.remove("over"); });
+      d.addEventListener("drop", (e) => {
+        e.preventDefault();
+        const from = this._dragIdx;
+        this._dragIdx = undefined;
+        this._move(from, i);
+      });
+      sum.append(grip, t, mk("↑", "Move up", i - 1), mk("↓", "Move down", i + 1), del);
       const body = document.createElement("div");
       body.className = "body";
       body.appendChild(this._form(GUEST_SCHEMA, { type: "vm", ...g }, (v) => {
