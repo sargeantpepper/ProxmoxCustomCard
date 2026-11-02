@@ -92,7 +92,7 @@ The action fields accept `button`, `switch` or `script` entities.
 
 ### Collapsed section
 
-Set `collapsed: true` on any guest (or tick **Put in collapsed section** in the editor) to move it into a section at the bottom that expands when you click its header. The header shows how many guests it holds and how many are running. Guests keep their relative order within each section.
+Set `collapsed: true` on any guest (or tick **Put in collapsed section** in the editor) to move it into a section at the bottom that expands when you click its header. It appears as a full-width rounded bar showing how many of its guests are running (green when healthy, amber if any are paused or unavailable, grey if none are running). Guests keep their relative order within each section.
 
 ```yaml
 guests:

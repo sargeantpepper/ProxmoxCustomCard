@@ -137,16 +137,20 @@ class ProxmoxGuestsCard extends HTMLElement {
         .chip { display: inline-flex; gap: 4px; align-items: center; flex: none; }
         .chip ha-icon { --mdc-icon-size: 14px; }
         .fold {
-          display: flex; align-items: center; gap: 8px; width: 100%; box-sizing: border-box;
-          margin: 0; padding: 10px 8px; border: none; border-top: 1px solid var(--divider-color);
-          background: transparent; color: var(--secondary-text-color); font: inherit; font-size: .9rem;
-          cursor: pointer; text-align: left;
+          display: flex; align-items: center; justify-content: center; gap: 10px;
+          width: calc(100% - 16px); box-sizing: border-box; margin: 8px 8px 4px; padding: 14px 16px;
+          border: none; border-radius: 14px; font: inherit; font-weight: 500; cursor: pointer;
+          color: var(--tone); background: color-mix(in srgb, var(--tone) 14%, transparent);
+          transition: background .15s;
         }
-        .fold:hover { color: var(--primary-text-color); }
-        .fold .ft { flex: 1; font-weight: 500; }
-        .fold .fc { font-size: .8rem; }
-        .fold ha-icon { --mdc-icon-size: 20px; transition: transform .2s; }
-        .fold.open ha-icon { transform: rotate(180deg); }
+        .fold.ok { --tone: var(--success-color, #43a047); }
+        .fold.warn { --tone: var(--warning-color, #ffa000); }
+        .fold.off { --tone: var(--secondary-text-color); }
+        .fold:hover { background: color-mix(in srgb, var(--tone) 22%, transparent); }
+        .fold ha-icon { --mdc-icon-size: 20px; flex: none; }
+        .fold .chev { transition: transform .2s; }
+        .fold.open .chev { transform: rotate(180deg); }
+        .foldbody { padding-top: 4px; }
         .compact .row { padding: 6px 8px; }
         .compact .meters { display: none; }
         .empty, .err { padding: 16px; color: var(--secondary-text-color); }
@@ -433,16 +437,20 @@ class ProxmoxGuestsCard extends HTMLElement {
         <div class="actions">${actions}</div>
         ${meters ? `<div class="meters">${meters}</div>` : ""}
       </div>`;
-      return { html, folded: !!g.collapsed, running: state === "running" };
+      return { html, folded: !!g.collapsed, running: state === "running", state };
     });
     const main = rows.filter((r) => !r.folded);
     const folded = rows.filter((r) => r.folded);
     const foldOpen = this._foldOpen ?? !!c.collapsed_open;
+    const fRun = folded.filter((r) => r.running).length;
+    const fAttn = folded.filter((r) => r.state === "paused" || r.state === "unavailable").length;
+    const fTone = fRun === 0 ? "off" : fAttn ? "warn" : "ok";
+    const fIcon = fTone === "ok" ? "mdi:check-circle-outline" : fTone === "warn" ? "mdi:alert-circle-outline" : "mdi:power-sleep";
     const foldHtml = folded.length ? `
-      <button class="fold ${foldOpen ? "open" : ""}" data-fold aria-expanded="${foldOpen}">
-        <span class="ft">${esc(c.collapsed_title)}</span>
-        <span class="fc">${folded.length} · ${folded.filter((r) => r.running).length} running</span>
-        <ha-icon icon="mdi:chevron-down"></ha-icon>
+      <button class="fold ${fTone} ${foldOpen ? "open" : ""}" data-fold aria-expanded="${foldOpen}">
+        <ha-icon icon="${fIcon}"></ha-icon>
+        <span>${esc(c.collapsed_title)} · ${fRun} / ${folded.length} running</span>
+        <ha-icon class="chev" icon="mdi:chevron-down"></ha-icon>
       </button>
       ${foldOpen ? `<div class="foldbody">${folded.map((r) => r.html).join("")}</div>` : ""}` : "";
 
