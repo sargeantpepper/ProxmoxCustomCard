@@ -38,7 +38,7 @@
  *     shutdown: button.pve1_lxc_pihole_shutdown
  */
 
-const PGC_VERSION = "1.6.0";
+const PGC_VERSION = "1.7.0";
 
 const ACTIONS = [
   { key: "start", icon: "mdi:play", label: "Start", when: ["stopped"], confirm: false },
@@ -178,16 +178,37 @@ class ProxmoxGuestsCard extends HTMLElement {
       show_summary: true,
       collapsed_title: "More guests",
       collapsed_open: false,
+      background_opacity: 100,
+      glass_background: true,
       discover: false,
       warn_at: 75,
       crit_at: 90,
       ...config,
     };
+    this._applyBackground();
     this._sig = "";
     this._discovered = null;
     this._discovering = false;
     this._discoverError = null;
     this._render();
+  }
+
+  _applyBackground() {
+    const ha = this.shadowRoot.querySelector("ha-card");
+    if (!ha) return;
+    const raw = Number(this._config.background_opacity);
+    const o = Number.isFinite(raw) ? Math.max(0, Math.min(100, raw)) : 100;
+    if (o >= 100) {
+      ha.style.removeProperty("background");
+      ha.style.removeProperty("backdrop-filter");
+      ha.style.removeProperty("-webkit-backdrop-filter");
+      return;
+    }
+    // Mix the theme's own card colour with transparency so every theme keeps its colour.
+    ha.style.background = `color-mix(in srgb, var(--ha-card-background, var(--card-background-color, #fff)) ${o}%, transparent)`;
+    const blur = this._config.glass_background !== false ? "blur(16px) saturate(1.2)" : "";
+    ha.style.setProperty("backdrop-filter", blur);
+    ha.style.setProperty("-webkit-backdrop-filter", blur);
   }
 
   get _list() {
@@ -554,6 +575,7 @@ const EDITOR_LABELS = {
   show_actions: "Show power buttons", show_summary: "Show running count",
   collapsed_title: "Title of the collapsed section", collapsed_open: "Start with the collapsed section open",
   collapsed: "Put in collapsed section",
+  background_opacity: "Card background opacity", glass_background: "Frosted glass blur (when translucent)",
   name: "Name", type: "Type", node: "Node (optional)", icon: "Icon (optional, default by type)", status: "Status entity",
   cpu: "CPU usage entity", memory: "Memory usage entity", disk: "Disk usage entity", uptime: "Uptime or last boot entity",
   start: "Start button", shutdown: "Shutdown button", reboot: "Reboot button", stop: "Force stop button",
@@ -569,6 +591,8 @@ const GENERAL_SCHEMA = [
   { name: "show_summary", selector: { boolean: {} } },
   { name: "collapsed_title", selector: { text: {} } },
   { name: "collapsed_open", selector: { boolean: {} } },
+  { name: "background_opacity", selector: { number: { min: 0, max: 100, step: 5, mode: "slider", unit_of_measurement: "%" } } },
+  { name: "glass_background", selector: { boolean: {} } },
 ];
 const GUEST_SCHEMA = [
   { name: "name", selector: { text: {} } },
@@ -671,6 +695,7 @@ class ProxmoxGuestsCardEditor extends HTMLElement {
       title: this._config.title ?? "Proxmox", icon: this._config.icon, discover: !!this._config.discover, compact: !!this._config.compact,
       show_actions: this._config.show_actions !== false, show_summary: this._config.show_summary !== false,
       collapsed_title: this._config.collapsed_title ?? "More guests", collapsed_open: !!this._config.collapsed_open,
+      background_opacity: this._config.background_opacity ?? 100, glass_background: this._config.glass_background !== false,
     }, (v) => Object.assign(this._config, v), { ...EDITOR_LABELS, icon: "Header icon (empty = status icon)" }));
 
     const h = document.createElement("h3");

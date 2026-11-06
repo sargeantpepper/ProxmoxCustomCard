@@ -80,6 +80,8 @@ Entity IDs above are examples; check yours under Developer Tools → States. Eve
 | `guests` | | Manual guests, or overrides for discovered ones (use `match: "<name>"`) |
 | `collapsed_title` | `More guests` | Heading of the collapsed section |
 | `collapsed_open` | `false` | Start with the collapsed section expanded |
+| `background_opacity` | `100` | Card background opacity, 0 to 100. Below 100 the theme's card colour becomes translucent. |
+| `glass_background` | `true` | Blur whatever is behind the card when the background is translucent (frosted glass) |
 | `compact` | `false` | Hide the usage bars |
 | `show_actions` | `true` | Show the power buttons |
 | `show_summary` | `true` | Show the "N / total running" count |
